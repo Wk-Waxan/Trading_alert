@@ -38,4 +38,10 @@ deno task compare   # เทียบ backtest เดิม/ใหม่ → rep
 
 ถ้า deploy โค้ดก่อน migration: optimizer และ `/use` จะเขียน `trend_mode`/`pullback` ไม่สำเร็จ
 
+### ประวัติ deploy
+
+- 2026-09-28: apply migration `pullback_and_htf_trend` → deploy `signal-scan` v16 (ตรวจแล้วว่าโค้ดที่ deploy ตรงกับ repo ทุกไบต์)
+  - รายการเฝ้า: NVDA เปลี่ยนเป็น 1d · Breakout 55 + เทรนด์ 1w · หยุดเฝ้า BTC 1h, ทอง 1h, AUDUSD, EURUSD, GBPUSD, USDJPY (ไม่ผ่าน backtest ทั้ง 1h และ 4h ดู `reports/compare-2026-09-28.md`)
+  - `signal-compare` (อ่านอย่างเดียว) deploy ไว้สำหรับเทียบผลรอบถัดไป
+
 Secrets ของฟังก์ชัน: `TG_TOKEN`, `TG_CHAT_ID`, `TWELVEDATA_KEY`, `CRON_SECRET`, `ANTHROPIC_API_KEY` (ไม่บังคับ) · cron อ่าน `sig_cron_secret` จาก Vault

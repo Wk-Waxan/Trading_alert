@@ -1,23 +1,5 @@
 [
  {
-  "id": 1,
-  "symbol": "BTCUSDT",
-  "source": "binance_spot",
-  "tf": "1h",
-  "strategy": "ma_cross",
-  "params": {
-   "fast": 9,
-   "slow": 21
-  },
-  "allow_short": false,
-  "trend_filter": false,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
- },
- {
   "id": 2,
   "symbol": "ETHUSDT",
   "source": "binance_spot",
@@ -36,31 +18,13 @@
   "auto": false
  },
  {
-  "id": 3,
-  "symbol": "XAUUSDT",
-  "source": "binance_futures",
-  "tf": "1h",
-  "strategy": "breakout",
-  "params": {
-   "n": 20
-  },
-  "allow_short": true,
-  "trend_filter": true,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
- },
- {
   "id": 4,
   "symbol": "NVDA",
   "source": "twelvedata",
-  "tf": "1h",
-  "strategy": "ma_cross",
+  "tf": "1d",
+  "strategy": "breakout",
   "params": {
-   "fast": 20,
-   "slow": 50
+   "n": 55
   },
   "allow_short": false,
   "trend_filter": true,
@@ -68,7 +32,8 @@
   "sl_mode": "atr",
   "atr_mult": 2,
   "tp_r": 2.0,
-  "auto": false
+  "auto": false,
+  "trend_mode": "htf"
  },
  {
   "id": 5,
@@ -267,76 +232,6 @@
   "atr_mult": 2,
   "tp_r": 0.0,
   "auto": true
- },
- {
-  "id": 16,
-  "symbol": "AUDUSD=X",
-  "source": "yahoo",
-  "tf": "1h",
-  "strategy": "ma_cross",
-  "params": {
-   "fast": 20,
-   "slow": 50
-  },
-  "allow_short": true,
-  "trend_filter": true,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
- },
- {
-  "id": 17,
-  "symbol": "EURUSD=X",
-  "source": "yahoo",
-  "tf": "1h",
-  "strategy": "ma_cross",
-  "params": {
-   "fast": 20,
-   "slow": 50
-  },
-  "allow_short": true,
-  "trend_filter": true,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
- },
- {
-  "id": 18,
-  "symbol": "GBPUSD=X",
-  "source": "yahoo",
-  "tf": "1h",
-  "strategy": "breakout",
-  "params": {
-   "n": 20
-  },
-  "allow_short": true,
-  "trend_filter": false,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
- },
- {
-  "id": 19,
-  "symbol": "USDJPY=X",
-  "source": "yahoo",
-  "tf": "1h",
-  "strategy": "breakout",
-  "params": {
-   "n": 20
-  },
-  "allow_short": true,
-  "trend_filter": false,
-  "vol_filter": false,
-  "sl_mode": "atr",
-  "atr_mult": 2,
-  "tp_r": 2.0,
-  "auto": false
  },
  {
   "id": 21,
