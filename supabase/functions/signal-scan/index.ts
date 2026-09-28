@@ -5,12 +5,13 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-type Bar = { t: number; o: number; h: number; l: number; c: number; v: number };
-type Pos = { side: number; entry: number; sl?: number; tp?: number };
-type Ev = { kind: "ENTRY" | "EXIT"; side: number; price: number; reason: string; sl?: number; tp?: number };
+import {
+  atrArr, type Bar, CANDS, DAY, describe, ema, entryFilters, type Ev, evaluate, HTF_OF, htfTrend, MIN_TEST_TRADES, MIN_TRAIN_TRADES, mk, passes, pickBest,
+  type Pos, prep, ranked, rawSignals, rsi, sim, slDesc, slDist, sma, step, TF_SEC, tpR,
+} from "./strategy.ts";
 
-const TF_SEC: Record<string, number> = { "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
-const DAY = 86400e3, FEE = 0.001, BARS = 1000;
+// BARS = แท่งที่ใช้สแกนสด · HIST_BARS = แท่งที่ใช้ backtest/เลือกกลยุทธ์ (ยิ่งมากยิ่งเชื่อถือได้)
+const BARS = 1000, HIST_BARS = 3000;
 const env = (k: string) => Deno.env.get(k) ?? "";
 const sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -26,16 +27,25 @@ async function getJSON(url: string, headers: Record<string, string> = {}) {
   }
 }
 
-async function fetchBinance(sym: string, tf: string, futures: boolean): Promise<Bar[]> {
+// Binance ให้ได้ครั้งละ 1000 แท่ง → ถ้าต้องการมากกว่านั้นดึงย้อนหลังเป็นช่วงๆ ด้วย endTime
+async function fetchBinance(sym: string, tf: string, futures: boolean, n = BARS): Promise<Bar[]> {
   const base = futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://data-api.binance.vision/api/v3/klines";
-  const rows = await getJSON(`${base}?symbol=${sym}&interval=${tf}&limit=${BARS}`);
-  return rows.map((r: any[]) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+  let out: Bar[] = [], end = 0;
+  while (out.length < n) {
+    const lim = Math.min(1000, n - out.length);
+    const rows = await getJSON(`${base}?symbol=${sym}&interval=${tf}&limit=${lim}${end ? `&endTime=${end}` : ""}`);
+    const bars: Bar[] = rows.map((r: any[]) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+    out = [...bars, ...out];
+    if (bars.length < lim) break;
+    end = bars[0].t - 1;
+  }
+  return out;
 }
 
-async function fetchTwelve(sym: string, tf: string): Promise<Bar[]> {
+async function fetchTwelve(sym: string, tf: string, n = BARS): Promise<Bar[]> {
   const iv = ({ "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" } as any)[tf];
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${iv}` +
-    `&outputsize=${BARS}&timezone=UTC&order=asc&apikey=${env("TWELVEDATA_KEY")}`;
+    `&outputsize=${Math.min(n, 5000)}&timezone=UTC&order=asc&apikey=${env("TWELVEDATA_KEY")}`;
   let j = await getJSON(url);
   if (j.code === 429) { await sleep(12000); j = await getJSON(url); }
   if (j.status === "error") throw new Error("Twelve Data: " + j.message);
@@ -45,9 +55,9 @@ async function fetchTwelve(sym: string, tf: string): Promise<Bar[]> {
   }));
 }
 
-async function fetchYahoo(sym: string, tf: string): Promise<Bar[]> {
+async function fetchYahoo(sym: string, tf: string, n = BARS): Promise<Bar[]> {
   const iv = tf === "4h" ? "1h" : tf;
-  const range = tf === "4h" ? "2y" : ({ "15m": "60d", "1h": "1y", "1d": "5y" } as any)[iv];
+  const range = tf === "4h" ? "2y" : ({ "15m": "60d", "1h": "1y", "1d": n > 1000 ? "10y" : "5y" } as any)[iv];
   const j = await getJSON(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${iv}&range=${range}`,
     { "User-Agent": "Mozilla/5.0" });
   const r = j.chart?.result?.[0];
@@ -69,16 +79,17 @@ function aggregate(bars: Bar[], size: number): Bar[] {
   return out;
 }
 
-function fetchBars(w: any) {
-  if (w.source === "binance_spot") return fetchBinance(w.symbol, w.tf, false);
-  if (w.source === "binance_futures") return fetchBinance(w.symbol, w.tf, true);
-  if (w.source === "twelvedata") return fetchTwelve(w.symbol, w.tf);
-  return fetchYahoo(w.symbol, w.tf);
+function fetchBars(w: any, n = BARS) {
+  if (w.source === "binance_spot") return fetchBinance(w.symbol, w.tf, false, n + 1);
+  if (w.source === "binance_futures") return fetchBinance(w.symbol, w.tf, true, n + 1);
+  if (w.source === "twelvedata") return fetchTwelve(w.symbol, w.tf, n + 1);
+  return fetchYahoo(w.symbol, w.tf, n);
 }
 
-async function closedBars(w: any) {
+// เฉพาะแท่งที่ปิดแล้ว · n = จำนวนแท่งสูงสุด (สแกนสดใช้ BARS, backtest ใช้ HIST_BARS)
+async function closedBars(w: any, n = BARS) {
   const now = Date.now(), step = TF_SEC[w.tf] * 1000;
-  return (await fetchBars(w)).filter((b) => b.t + step <= now).slice(-BARS);
+  return (await fetchBars(w, n)).filter((b) => b.t + step <= now).slice(-n);
 }
 
 // ราคาปัจจุบัน (live) ของหลายตัวพร้อมกัน
@@ -112,104 +123,6 @@ async function livePrices(ws: any[]): Promise<Map<string, number>> {
   return out;
 }
 
-// ============================ indicators ============================
-function sma(a: number[], n: number) {
-  const r = Array(a.length).fill(NaN); let s = 0;
-  for (let i = 0; i < a.length; i++) { s += a[i]; if (i >= n) s -= a[i - n]; if (i >= n - 1) r[i] = s / n; }
-  return r;
-}
-function rsi(a: number[], n: number) {
-  const r = Array(a.length).fill(NaN); let g = 0, l = 0;
-  for (let i = 1; i < a.length; i++) {
-    const d = a[i] - a[i - 1], up = Math.max(d, 0), dn = Math.max(-d, 0);
-    if (i <= n) { g += up; l += dn; if (i === n) { g /= n; l /= n; r[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } }
-    else { g = (g * (n - 1) + up) / n; l = (l * (n - 1) + dn) / n; r[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); }
-  }
-  return r;
-}
-
-function atrArr(bars: Bar[], n = 14) {
-  const r = Array(bars.length).fill(NaN); let a = 0;
-  for (let i = 1; i < bars.length; i++) {
-    const tr = Math.max(bars[i].h - bars[i].l, Math.abs(bars[i].h - bars[i - 1].c), Math.abs(bars[i].l - bars[i - 1].c));
-    if (i <= n) { a += tr; if (i === n) { a /= n; r[i] = a; } } else { a = (a * (n - 1) + tr) / n; r[i] = a; }
-  }
-  return r;
-}
-
-function rawSignals(bars: Bar[], strategy: string, p: any): (string | null)[] {
-  const c = bars.map((b) => b.c), sig: (string | null)[] = Array(bars.length).fill(null);
-  if (strategy === "ma_cross") {
-    const f = sma(c, p.fast ?? 20), s = sma(c, p.slow ?? 50);
-    for (let i = 1; i < c.length; i++) {
-      if (f[i - 1] <= s[i - 1] && f[i] > s[i]) sig[i] = "L";
-      else if (f[i - 1] >= s[i - 1] && f[i] < s[i]) sig[i] = "S";
-    }
-  } else if (strategy === "rsi") {
-    const r = rsi(c, p.n ?? 14), lo = p.low ?? 30, hi = p.high ?? 70;
-    for (let i = 1; i < c.length; i++) {
-      if (r[i - 1] < lo && r[i] >= lo) sig[i] = "L";
-      else if (r[i - 1] > hi && r[i] <= hi) sig[i] = "S";
-    }
-  } else if (strategy === "breakout") {
-    const n = p.n ?? 20;
-    for (let i = n; i < c.length; i++) {
-      let hh = -Infinity, ll = Infinity;
-      for (let k = i - n; k < i; k++) { hh = Math.max(hh, bars[k].h); ll = Math.min(ll, bars[k].l); }
-      if (c[i] > hh) sig[i] = "L"; else if (c[i] < ll) sig[i] = "S";
-    }
-  }
-  return sig;
-}
-
-// ตัวกรองสำหรับ "เข้า" เท่านั้น (ออกไม่กรอง): เทรนด์ = เหนือ/ใต้ MA200, volume = สูงกว่าเฉลี่ย 20 แท่ง 1.2 เท่า
-function entryFilters(bars: Bar[], w: any) {
-  const c = bars.map((b) => b.c), s200 = sma(c, 200);
-  const vol = bars.map((b) => b.v || 0), va = sma(vol, 20), hasVol = vol.some((x) => x > 0);
-  const volOk = (i: number) => !w.vol_filter || !hasVol || vol[i] > 1.2 * va[i];
-  return {
-    okL: bars.map((_, i) => (!w.trend_filter || c[i] > s200[i]) && volOk(i)),
-    okS: bars.map((_, i) => (!w.trend_filter || c[i] < s200[i]) && volOk(i)),
-  };
-}
-
-function describe(w: any) {
-  const p = w.params || {};
-  const base = w.strategy === "ma_cross" ? `MA ${p.fast ?? 20}/${p.slow ?? 50}`
-    : w.strategy === "rsi" ? `RSI ${p.n ?? 14} (${p.low ?? 30}/${p.high ?? 70})` : `Breakout ${p.n ?? 20}`;
-  const f = [w.trend_filter ? "กรองเทรนด์" : "", w.vol_filter ? "กรอง volume" : ""].filter(Boolean).join("+");
-  return f ? `${base} · ${f}` : base;
-}
-
-// ระยะ SL: ATR × ตัวคูณ (ปรับตามความผันผวน) หรือ % คงที่
-function slDist(w: any, entry: number, atrV?: number) {
-  if (w.sl_mode !== "pct" && atrV && atrV > 0) return atrV * (+w.atr_mult || 2);
-  return w.sl_pct ? entry * w.sl_pct / 100 : 0;
-}
-const tpR = (w: any) => w.sl_mode !== "pct" ? (+w.tp_r || 0) : (w.tp_pct && w.sl_pct ? w.tp_pct / w.sl_pct : 0);
-const slDesc = (w: any) => w.sl_mode !== "pct" ? `${+w.atr_mult || 2}×ATR` : `${w.sl_pct}%`;
-
-function step(pos: Pos, b: Bar, s: string | null, w: any, okL: boolean, okS: boolean, atrV?: number): [Pos, Ev[]] {
-  const ev: Ev[] = []; let { side, entry, sl, tp } = pos;
-  if (side) {
-    if (sl && (side > 0 ? b.l <= sl : b.h >= sl)) { ev.push({ kind: "EXIT", side, price: sl, reason: "โดน Stop loss" }); side = 0; }
-    else if (tp && (side > 0 ? b.h >= tp : b.l <= tp)) { ev.push({ kind: "EXIT", side, price: tp, reason: "ถึง Take profit" }); side = 0; }
-  }
-  if (s) {
-    const want = s === "L" ? 1 : (w.allow_short ? -1 : 0);
-    if (side && side !== want) { ev.push({ kind: "EXIT", side, price: b.c, reason: "สัญญาณกลับทาง" }); side = 0; }
-    const ok = want === 1 ? okL : want === -1 ? okS : false;
-    if (want && !side && ok) {
-      side = want; entry = b.c;
-      const d = slDist(w, entry, atrV), r = tpR(w);
-      sl = d ? entry - side * d : 0; tp = d && r ? entry + side * d * r : 0;
-      ev.push({ kind: "ENTRY", side, price: entry, reason: describe(w), sl, tp });
-    }
-  }
-  if (!side) { sl = 0; tp = 0; }
-  return [{ side, entry, sl, tp }, ev];
-}
-
 // ============================ formatting ============================
 const px = (v: number) => v == null || !isFinite(v) ? "-" : v.toLocaleString("en-US", { maximumSignificantDigits: 6 });
 const money = (v: number) => !isFinite(v) ? "-" : v.toLocaleString("en-US", { maximumFractionDigits: v >= 100 ? 0 : 2 });
@@ -217,8 +130,6 @@ const pct = (v: number) => !isFinite(v) ? "-" : `${v >= 0 ? "+" : ""}${v.toFixed
 const bkk = (t: number) => new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const display = (s: string) => s.replace(/\.BK$/, "").replace(/USDT$/, "").replace(/=X$/, "");
-const mk = (w: any) => w.source === "binance_futures" ? "gold" : w.source === "binance_spot" ? "crypto"
-  : w.symbol.endsWith("=X") ? "fx" : (w.source === "yahoo" && w.symbol.endsWith(".BK")) ? "th" : "us";
 const MARKETS = ["crypto", "gold", "fx", "th", "us"];
 const MK_LABEL: Record<string, string> = { crypto: "คริปโต", gold: "ทองคำ/โลหะ", fx: "Forex", th: "หุ้นไทย", us: "หุ้น US" };
 const MK_DEFAULT: Record<string, boolean> = { crypto: true, gold: true, fx: true, th: false, us: false };
@@ -235,6 +146,8 @@ function why(w: any, side: number) {
     : `เส้นเฉลี่ย ${p.fast ?? 20} ตัดลงใต้เส้น ${p.slow ?? 50} → แนวโน้มเริ่มลง`;
   if (w.strategy === "rsi") return side > 0 ? `RSI เด้งขึ้นจากโซนขายมากเกิน (${p.low ?? 30}) → มีโอกาสเด้งกลับ`
     : `RSI ลงจากโซนซื้อมากเกิน (${p.high ?? 70}) → มีโอกาสย่อตัว`;
+  if (w.strategy === "pullback") return side > 0 ? `ขาขึ้น (EMA ${p.fast ?? 20} > ${p.slow ?? 50}) ราคาย่อแตะ EMA ${p.fast ?? 20} แล้วปิดเหนือ high แท่งก่อน → ย่อจบ ไปต่อ`
+    : `ขาลง (EMA ${p.fast ?? 20} < ${p.slow ?? 50}) ราคาเด้งแตะ EMA ${p.fast ?? 20} แล้วปิดใต้ low แท่งก่อน → เด้งจบ ลงต่อ`;
   return side > 0 ? `ราคาทะลุจุดสูงสุด ${p.n ?? 20} แท่ง → แรงซื้อเข้า` : `ราคาหลุดจุดต่ำสุด ${p.n ?? 20} แท่ง → แรงขายเข้า`;
 }
 const EXIT_WHY: Record<string, string> = { "โดน Stop loss": "ราคาแตะจุดตัดขาดทุน (SL)", "ถึง Take profit": "ราคาถึงเป้ากำไร (TP) 🎉",
@@ -332,8 +245,9 @@ function alertText(w: any, e: Ev, closeT: number, prevEntry: number, livePx: num
   return { text: L.join("\n"), pnl };
 }
 
+// trend_mode ใส่เฉพาะเมื่อเป็น 'htf' เพื่อให้ key ของตัวที่ตั้งไว้แล้วไม่เปลี่ยน (ไม่งั้นทุกตัวจะถูก sync ใหม่หลัง deploy)
 const cfgOf = (w: any) => JSON.stringify([w.symbol, w.source, w.tf, w.strategy, w.params, w.allow_short, w.sl_pct, w.tp_pct,
-  w.trend_filter, w.vol_filter, w.sl_mode, w.atr_mult, w.tp_r]);
+  w.trend_filter, w.vol_filter, w.sl_mode, w.atr_mult, w.tp_r, ...(w.trend_mode === "htf" ? ["htf"] : [])]);
 
 // ================================ scan ================================
 async function jobScan() {
@@ -812,12 +726,29 @@ async function applyReceipt(d: any) {
 // =============================== status ===============================
 const LINE = "━━━━━━━━━━━━";
 
+// ตัวกรองเทรนด์ ณ แท่งล่าสุด: ยังเข้าฝั่งไหนไม่ได้ และต้องรออะไร
+function trendBlock(w: any, bars: Bar[]) {
+  const c = bars.map((b) => b.c), i = c.length - 1;
+  if (!w.trend_filter) return { blockL: false, blockS: false, needL: "", needS: "", tag: "" };
+  if (w.trend_mode === "htf") {
+    const t = htfTrend(bars, w.tf)[i], h = HTF_OF[w.tf] ?? "TF ใหญ่";
+    return { blockL: t <= 0, blockS: t >= 0, needL: `เทรนด์ ${h} ต้องเป็นขาขึ้น`, needS: `เทรนด์ ${h} ต้องเป็นขาลง`, tag: `เทรนด์${h}` };
+  }
+  const s200 = sma(c, 200)[i];
+  return { blockL: !(c[i] > s200), blockS: !(c[i] < s200), needL: `ราคาต้องกลับขึ้นเหนือ MA200 (${px(s200)}) `,
+    needS: `ราคาต้องลงใต้ MA200 (${px(s200)}) `, tag: "MA200" };
+}
+
 // เงื่อนไขที่จะเกิดสัญญาณถัดไป + ระยะห่างจากตอนนี้
 function triggers(w: any, bars: Bar[]) {
   const c = bars.map((b) => b.c), i = c.length - 1, p = w.params || {}, out: string[] = [];
-  const s200 = sma(c, 200)[i];
+  const tb = trendBlock(w, bars);
   let L = "", Sx = "";
-  if (w.strategy === "ma_cross") {
+  if (w.strategy === "pullback") {
+    const fN = p.fast ?? 20, sN = p.slow ?? 50, f = ema(c, fN)[i], s = ema(c, sN)[i];
+    L = f > s ? `ราคาย่อแตะ EMA${fN} (${px(f)}) แล้วปิดเหนือ high แท่งก่อน` : `EMA${fN} ต้องกลับขึ้นเหนือ EMA${sN} ก่อน (ตอนนี้ขาลง)`;
+    Sx = f < s ? `ราคาเด้งแตะ EMA${fN} (${px(f)}) แล้วปิดใต้ low แท่งก่อน` : `EMA${fN} ต้องลงใต้ EMA${sN} ก่อน (ตอนนี้ขาขึ้น)`;
+  } else if (w.strategy === "ma_cross") {
     const fN = p.fast ?? 20, sN = p.slow ?? 50, f = sma(c, fN)[i], s = sma(c, sN)[i], gap = Math.abs(f / s - 1) * 100;
     L = f < s ? `เส้น ${fN} ตัดขึ้นเหนือเส้น ${sN} (ตอนนี้ยังต่ำกว่า ${gap.toFixed(2)}%)` : `เส้น ${fN} อยู่เหนือเส้น ${sN} แล้ว รอรอบตัดใหม่`;
     Sx = f > s ? `เส้น ${fN} ตัดลงใต้เส้น ${sN} (ตอนนี้ยังสูงกว่า ${gap.toFixed(2)}%)` : `เส้น ${fN} อยู่ใต้เส้น ${sN} แล้ว รอรอบตัดใหม่`;
@@ -831,9 +762,8 @@ function triggers(w: any, bars: Bar[]) {
     L = `ราคาปิดเหนือ ${px(hh)} (ห่าง ${pct((hh / c[i] - 1) * 100)})`;
     Sx = `ราคาปิดต่ำกว่า ${px(ll)} (ห่าง ${pct((ll / c[i] - 1) * 100)})`;
   }
-  const blockL = w.trend_filter && !(c[i] > s200), blockS = w.trend_filter && !(c[i] < s200);
-  out.push(`🎯 เข้า Long เมื่อ: ${L}` + (blockL ? `\n     ⛔ และราคาต้องกลับขึ้นเหนือ MA200 (${px(s200)}) ก่อน` : ""));
-  if (w.allow_short) out.push(`🎯 เข้า Short เมื่อ: ${Sx}` + (blockS ? `\n     ⛔ และราคาต้องลงใต้ MA200 (${px(s200)}) ก่อน` : ""));
+  out.push(`🎯 เข้า Long เมื่อ: ${L}` + (tb.blockL ? `\n     ⛔ และ${tb.needL}ก่อน` : ""));
+  if (w.allow_short) out.push(`🎯 เข้า Short เมื่อ: ${Sx}` + (tb.blockS ? `\n     ⛔ และ${tb.needS}ก่อน` : ""));
   return out;
 }
 
@@ -895,8 +825,13 @@ async function sendStatus() { for (const m of await statusText()) await tg(m, tr
 // ============================ กระดานปักหมุด ============================
 // เงื่อนไขสัญญาณถัดไปแบบสั้น (บรรทัดเดียว) เก็บไว้ใน sig_state.trigger ทุกครั้งที่แท่งปิด
 function trigShort(w: any, bars: Bar[]) {
-  const c = bars.map((b) => b.c), i = c.length - 1, p = w.params || {}, s200 = sma(c, 200)[i];
-  const blk = (side: number) => w.trend_filter && !(side > 0 ? c[i] > s200 : c[i] < s200) ? " ⛔MA200" : "";
+  const c = bars.map((b) => b.c), i = c.length - 1, p = w.params || {}, tb = trendBlock(w, bars);
+  const blk = (side: number) => (side > 0 ? tb.blockL : tb.blockS) ? ` ⛔${tb.tag}` : "";
+  if (w.strategy === "pullback") {
+    const fN = p.fast ?? 20, sN = p.slow ?? 50, f = ema(c, fN)[i], s = ema(c, sN)[i];
+    if (f > s) return `Long เมื่อย่อแตะ EMA${fN} ${px(f)} แล้วปิดเหนือ high แท่งก่อน${blk(1)}`;
+    return w.allow_short ? `Short เมื่อเด้งแตะ EMA${fN} ${px(f)} แล้วปิดใต้ low แท่งก่อน${blk(-1)}` : `รอ EMA${fN} กลับขึ้นเหนือ EMA${sN}`;
+  }
   if (w.strategy === "ma_cross") {
     const fN = p.fast ?? 20, sN = p.slow ?? 50, f = sma(c, fN)[i], s = sma(c, sN)[i], g = Math.abs(f / s - 1) * 100;
     if (f < s) return `Long เมื่อ MA${fN} ตัดขึ้น MA${sN} (ห่าง ${g.toFixed(2)}%)${blk(1)}`;
@@ -1052,33 +987,11 @@ async function jobScreen() {
 }
 
 // ============================== optimizer ==============================
-const CANDS = [
-  ...[[9, 21], [10, 30], [20, 50]].map(([fast, slow]) => ({ strategy: "ma_cross", params: { fast, slow } })),
-  ...[[30, 70], [25, 75], [35, 65]].map(([low, high]) => ({ strategy: "rsi", params: { n: 14, low, high } })),
-  ...[10, 20, 55].map((n) => ({ strategy: "breakout", params: { n } })),
-].flatMap((c) => [{ ...c, trend_filter: true }, { ...c, trend_filter: false }]);
-
-function prep(bars: Bar[], w: any) { return { sig: rawSignals(bars, w.strategy, w.params), ...entryFilters(bars, w), atr: atrArr(bars) }; }
-function sim(bars: Bar[], w: any, from: number, to: number, pre = prep(bars, w), log?: any[]) {
-  const { sig, okL, okS, atr } = pre;
-  let pos: Pos = { side: 0, entry: 0 }, eq = 1, trades = 0, wins = 0, ei = 0, peak = 1, dd = 0;
-  const close = (i: number, px_: number, why: string) => {
-    const r = pos.side * (px_ / pos.entry - 1) - 2 * FEE; eq *= 1 + r; trades++; if (r > 0) wins++;
-    peak = Math.max(peak, eq); dd = Math.min(dd, eq / peak - 1);
-    log?.push({ ei, xi: i, side: pos.side, entry: +pos.entry.toPrecision(7), exit: +px_.toPrecision(7), sl: pos.sl ? +pos.sl.toPrecision(7) : null, r: +(r * 100).toFixed(2), why });
-  };
-  for (let i = from; i <= to; i++) {
-    const prev = { ...pos }; let evs: Ev[];
-    [pos, evs] = step(pos, bars[i], sig[i], w, okL[i], okS[i], atr[i]);
-    for (const e of evs) {
-      if (e.kind === "EXIT") { const cur = pos; pos = prev; close(i, e.price, e.reason); pos = cur; }
-      else { ei = i; }
-    }
-  }
-  if (pos.side) close(to, bars[to].c, "จบข้อมูล");
-  return { ret: eq - 1, trades, wins, dd };
-}
-
+// ตัวเลือกใหม่ทุกตัวที่กรองเทรนด์ ใช้เทรนด์จาก TF ใหญ่ (trend_mode = 'htf')
+const OPT_CANDS = CANDS.map((c) => ({ ...c, trend_mode: c.trend_filter ? "htf" : "ma200" }));
+const trendMode = (w: any) => w.trend_mode === "htf" ? "htf" : "ma200";
+const fin = (x: number) => isFinite(x) ? +x.toFixed(3) : null;
+const pf = (x: number) => !isFinite(x) ? "∞" : x.toFixed(2);
 async function jobOptimize(force = false) {
   const { data: ws } = await sb.from("sig_watchlist").select("*").eq("active", true).order("id");
   const { data: st } = await sb.from("sig_state").select("watch_id,side");
@@ -1090,24 +1003,24 @@ async function jobOptimize(force = false) {
     if (!force && w.optimized_at && Date.parse(w.optimized_at) > weekAgo) continue;
     try {
       if (w.source === "twelvedata" && tdCalls++ > 0) await sleep(8000);
-      const bars = await closedBars(w), n = bars.length;
+      const bars = await closedBars(w, HIST_BARS), n = bars.length;
       if (n < 150) continue;
       const split = Math.floor(n * 0.7);
-      const res = CANDS.map((c) => { const t = { ...w, ...c }, pr = prep(bars, t); return { ...c, tr: sim(bars, t, 0, split - 1, pr), te: sim(bars, t, split, n - 1, pr) }; });
-      const best = res.filter((r) => r.tr.trades >= 3).sort((a, b) => b.tr.ret - a.tr.ret)[0];
+      const best = pickBest(evaluate(bars, w, OPT_CANDS));
       const bh = bars[n - 1].c / bars[split].c - 1, side = st?.find((s) => s.watch_id === w.id)?.side ?? 0;
       const name = w.name || display(w.symbol);
       let action: string;
-      if (best && best.te.ret > 0) {
-        const changed = best.strategy !== w.strategy || JSON.stringify(best.params) !== JSON.stringify(w.params) || best.trend_filter !== w.trend_filter;
+      if (best && passes(best)) {
+        const changed = best.strategy !== w.strategy || JSON.stringify(best.params) !== JSON.stringify(w.params) ||
+          best.trend_filter !== w.trend_filter || (best.trend_filter && trendMode(best) !== trendMode(w));
         if (!changed) action = "kept";
         else if (side !== 0) action = "pending";
         else {
-          await sb.from("sig_watchlist").update({ strategy: best.strategy, params: best.params, trend_filter: best.trend_filter }).eq("id", w.id);
+          await sb.from("sig_watchlist").update({ strategy: best.strategy, params: best.params, trend_filter: best.trend_filter, trend_mode: best.trend_mode }).eq("id", w.id);
           action = "changed";
         }
         const icon = action === "changed" ? "🔄" : action === "pending" ? "⏳" : "✅";
-        L.push(`${icon} ${name}: ${describe({ ...w, ...best })}  ทดสอบ ${pct(best.te.ret * 100)} (ถือยาว ${pct(bh * 100)})` +
+        L.push(`${icon} ${name}: ${describe({ ...w, ...best })}  ทดสอบ ${pct(best.te.ret * 100)} · PF ${pf(best.te.pf)} · ${best.te.trades} ไม้ (ถือยาว ${pct(bh * 100)})` +
           (action === "pending" ? " รอเปลี่ยนหลังปิดไม้" : ""));
       } else if (w.auto && side === 0) {
         await sb.from("sig_watchlist").update({ active: false }).eq("id", w.id);
@@ -1119,7 +1032,8 @@ async function jobOptimize(force = false) {
         test_pct: best ? +(best.te.ret * 100).toFixed(2) : null, bh_test_pct: +(bh * 100).toFixed(2), trades: best?.te.trades ?? 0, action });
     } catch (e) { L.push(`❗ ${w.symbol}: ${e instanceof Error ? e.message : e}`); }
   }
-  if (L.length) await tg(["🧪 Backtest เลือกกลยุทธ์", "เรียนรู้จากข้อมูล 70% แรก แล้วทดสอบกับ 30% ล่าสุดที่ไม่เคยเห็น", "ใช้ได้ต่อเมื่อผลช่วงทดสอบเป็นบวก", "", ...L].join("\n"));
+  if (L.length) await tg(["🧪 Backtest เลือกกลยุทธ์", "เรียนรู้จากข้อมูล 70% แรก แล้วทดสอบกับ 30% ล่าสุดที่ไม่เคยเห็น",
+    `ใช้ได้ต่อเมื่อช่วงทดสอบมี ≥${MIN_TEST_TRADES} ไม้, PF ≥ 1.1 และกำไรเป็นบวก (ช่วงเรียนรู้ต้องมี ≥${MIN_TRAIN_TRADES} ไม้)`, "", ...L].join("\n"));
   return { ok: true, checked: L.length };
 }
 
@@ -1130,13 +1044,14 @@ async function jobBacktest() {
   let n = 0;
   for (const w of (ws ?? []).filter((w) => isOn(S, w))) {
     try {
-      const bars = await closedBars(w), N = bars.length;
+      const bars = await closedBars(w, HIST_BARS), N = bars.length;
       if (N < 150) continue;
       const split = Math.floor(N * 0.7), log: any[] = [], pr = prep(bars, w);
       const all = sim(bars, w, 0, N - 1, pr, log), te = sim(bars, w, split, N - 1, pr);
       await sb.from("sig_backtest").upsert({ watch_id: w.id, run_at: new Date().toISOString(), cfg: `${describe(w)} · SL ${slDesc(w)}${tpR(w) ? ` · TP ${+tpR(w).toFixed(2)}R` : ""}`,
         split_i: split, times: bars.map((b) => b.t), closes: bars.map((b) => +b.c.toPrecision(7)), trades: log,
-        stats: { ret: all.ret, trades: all.trades, wins: all.wins, dd: all.dd, test_ret: te.ret, bh: bars[N - 1].c / bars[0].c - 1 } });
+        stats: { ret: all.ret, trades: all.trades, wins: all.wins, dd: all.dd, pf: fin(all.pf), test_ret: te.ret, test_pf: fin(te.pf), test_trades: te.trades,
+          bh: bars[N - 1].c / bars[0].c - 1 } });
       n++;
     } catch (e) { console.error("bt", w.symbol, e); }
   }
@@ -1154,21 +1069,22 @@ async function findWatch(q: string) {
 async function testText(q: string) {
   const w = await findWatch(q);
   if (!w) return `ไม่พบ ${q} ในรายการ เพิ่มก่อนด้วย /add ${q}`;
-  const bars = await closedBars(w), n = bars.length;
+  const bars = await closedBars(w, HIST_BARS), n = bars.length;
   if (n < 150) return `ข้อมูล ${display(w.symbol)} ยังไม่พอ (${n} แท่ง)`;
   const split = Math.floor(n * 0.7), bh = bars[n - 1].c / bars[split].c - 1;
-  const res = CANDS.map((c) => { const t = { ...w, ...c }, pr = prep(bars, t); return { ...c, tr: sim(bars, t, 0, split - 1, pr), te: sim(bars, t, split, n - 1, pr) }; })
-    .filter((r) => r.tr.trades >= 3).sort((a, b) => b.tr.ret - a.tr.ret).slice(0, 6);
+  const res = ranked(evaluate(bars, w, OPT_CANDS)).slice(0, 6);
   const cp = prep(bars, w), cur = { tr: sim(bars, w, 0, split - 1, cp), te: sim(bars, w, split, n - 1, cp) };
-  await sb.from("sig_state").update({ last_test: res.map((r) => ({ strategy: r.strategy, params: r.params, trend_filter: r.trend_filter })) }).eq("watch_id", w.id);
-  const name = w.name || display(w.symbol), ok = (x: number) => x > 0 ? "✅" : "❌";
+  await sb.from("sig_state").update({ last_test: res.map((r) => ({ strategy: r.strategy, params: r.params, trend_filter: r.trend_filter, trend_mode: r.trend_mode })) }).eq("watch_id", w.id);
+  const name = w.name || display(w.symbol), ok = (r: any) => passes(r) ? "✅" : "❌";
   const L = [`🧪 ทดสอบกลยุทธ์ ${name} · ${w.tf} (${n} แท่ง)`, `ถือยาวเฉยๆ ช่วงทดสอบ: ${pct(bh * 100)}`, "",
-    `ใช้อยู่: ${describe(w)} (${w.manual ? "เลือกเอง" : "อัตโนมัติ"})`, `   ทดสอบ ${pct(cur.te.ret * 100)} ${ok(cur.te.ret)} · ชนะ ${cur.te.wins}/${cur.te.trades}`, "",
-    "ตัวเลือก (เรียงตามช่วงเรียนรู้):"];
+    `ใช้อยู่: ${describe(w)} (${w.manual ? "เลือกเอง" : "อัตโนมัติ"})`,
+    `   ทดสอบ ${pct(cur.te.ret * 100)} ${ok(cur)} · PF ${pf(cur.te.pf)} · ชนะ ${cur.te.wins}/${cur.te.trades}`, "",
+    `ตัวเลือก (เรียงตาม PF ช่วงเรียนรู้ · ต้องมี ≥${MIN_TRAIN_TRADES} ไม้):`];
   res.forEach((r, i) => L.push(`${i + 1}. ${describe({ ...w, ...r })}`,
-    `   เรียนรู้ ${pct(r.tr.ret * 100)} · ทดสอบ ${pct(r.te.ret * 100)} ${ok(r.te.ret)} · ชนะ ${r.te.wins}/${r.te.trades}`));
+    `   เรียนรู้ ${pct(r.tr.ret * 100)} PF ${pf(r.tr.pf)} · ทดสอบ ${pct(r.te.ret * 100)} PF ${pf(r.te.pf)} ${ok(r)} · ชนะ ${r.te.wins}/${r.te.trades}`));
+  if (!res.length) L.push(`ไม่มีตัวเลือกที่มีเทรดพอ (≥${MIN_TRAIN_TRADES} ไม้ในช่วงเรียนรู้)`);
   L.push("", `👉 เลือกข้อ 2: /use ${display(w.symbol)} 2`, `👉 ให้ระบบเลือกเอง: /auto ${display(w.symbol)}`,
-    "ช่วงทดสอบ = ข้อมูล 30% ล่าสุดที่ไม่ได้ใช้ตอนเลือก ✅ คือยังทำกำไรในช่วงนั้น");
+    `ช่วงทดสอบ = ข้อมูล 30% ล่าสุดที่ไม่ได้ใช้ตอนเลือก ✅ คือมี ≥${MIN_TEST_TRADES} ไม้, PF ≥ 1.1 และกำไรเป็นบวก`);
   return L.join("\n");
 }
 
@@ -1367,7 +1283,7 @@ async function handleBot(req: Request) {
   }
   if (cmd === "/test") {
     if (!args[0]) return tg("ใช้แบบนี้: /test BTC หรือ /test EURUSD");
-    await tg("⏳ กำลังทดสอบ 18 แบบ...");
+    await tg(`⏳ กำลังทดสอบ ${OPT_CANDS.length} แบบ...`);
     return tg(await testText(args[0]));
   }
   if (cmd === "/use") {
@@ -1376,7 +1292,7 @@ async function handleBot(req: Request) {
     const { data: s } = await sb.from("sig_state").select("last_test,side").eq("watch_id", w.id).maybeSingle();
     const c = s?.last_test?.[k - 1];
     if (!c) return tg(`ยังไม่มีผลทดสอบข้อ ${k} พิมพ์ /test ${display(w.symbol)} ก่อน`);
-    await sb.from("sig_watchlist").update({ strategy: c.strategy, params: c.params, trend_filter: c.trend_filter, manual: true,
+    await sb.from("sig_watchlist").update({ strategy: c.strategy, params: c.params, trend_filter: c.trend_filter, trend_mode: c.trend_mode ?? "ma200", manual: true,
       optimized_at: new Date().toISOString() }).eq("id", w.id);
     return tg(`✅ ${w.name || display(w.symbol)} ใช้ ${describe({ ...w, ...c })} แล้ว (เลือกเอง ระบบจะไม่เปลี่ยนให้)` +
       (s?.side ? "\nสถานะค้างจะถูกคำนวณใหม่ตามกลยุทธ์นี้" : "") + "\nจะได้ข้อความ \"เริ่มเฝ้า\" ใน 5 นาที");

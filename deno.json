@@ -1,0 +1,7 @@
+{
+  "tasks": {
+    "test": "deno test supabase/functions/signal-scan/",
+    "compare": "deno run --allow-net --allow-read --allow-write scripts/compare.ts"
+  },
+  "lint": { "rules": { "exclude": ["no-explicit-any", "no-import-prefix"] } }
+}

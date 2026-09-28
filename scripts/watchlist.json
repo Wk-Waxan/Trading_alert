@@ -1,0 +1,359 @@
+[
+ {
+  "id": 1,
+  "symbol": "BTCUSDT",
+  "source": "binance_spot",
+  "tf": "1h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 9,
+   "slow": 21
+  },
+  "allow_short": false,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 2,
+  "symbol": "ETHUSDT",
+  "source": "binance_spot",
+  "tf": "4h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 9,
+   "slow": 21
+  },
+  "allow_short": false,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": false
+ },
+ {
+  "id": 3,
+  "symbol": "XAUUSDT",
+  "source": "binance_futures",
+  "tf": "1h",
+  "strategy": "breakout",
+  "params": {
+   "n": 20
+  },
+  "allow_short": true,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 4,
+  "symbol": "NVDA",
+  "source": "twelvedata",
+  "tf": "1h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 5,
+  "symbol": "AAPL",
+  "source": "twelvedata",
+  "tf": "1d",
+  "strategy": "breakout",
+  "params": {
+   "n": 10
+  },
+  "allow_short": false,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": false
+ },
+ {
+  "id": 6,
+  "symbol": "PTT.BK",
+  "source": "yahoo",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 10,
+   "slow": 30
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": false
+ },
+ {
+  "id": 7,
+  "symbol": "CPALL.BK",
+  "source": "yahoo",
+  "tf": "1d",
+  "strategy": "rsi",
+  "params": {
+   "n": 14,
+   "low": 30,
+   "high": 70
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": false
+ },
+ {
+  "id": 8,
+  "symbol": "ENAUSDT",
+  "source": "binance_spot",
+  "tf": "4h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 9,
+  "symbol": "NEARUSDT",
+  "source": "binance_spot",
+  "tf": "4h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 10,
+  "symbol": "LINKUSDT",
+  "source": "binance_spot",
+  "tf": "4h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 11,
+  "symbol": "TOP.BK",
+  "source": "yahoo",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 12,
+  "symbol": "BCP.BK",
+  "source": "yahoo",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 10,
+   "slow": 30
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 13,
+  "symbol": "PLTR",
+  "source": "twelvedata",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 14,
+  "symbol": "CRM",
+  "source": "twelvedata",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 15,
+  "symbol": "AMD",
+  "source": "twelvedata",
+  "tf": "1d",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ },
+ {
+  "id": 16,
+  "symbol": "AUDUSD=X",
+  "source": "yahoo",
+  "tf": "1h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": true,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 17,
+  "symbol": "EURUSD=X",
+  "source": "yahoo",
+  "tf": "1h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": true,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 18,
+  "symbol": "GBPUSD=X",
+  "source": "yahoo",
+  "tf": "1h",
+  "strategy": "breakout",
+  "params": {
+   "n": 20
+  },
+  "allow_short": true,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 19,
+  "symbol": "USDJPY=X",
+  "source": "yahoo",
+  "tf": "1h",
+  "strategy": "breakout",
+  "params": {
+   "n": 20
+  },
+  "allow_short": true,
+  "trend_filter": false,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 2.0,
+  "auto": false
+ },
+ {
+  "id": 21,
+  "symbol": "QNTUSDT",
+  "source": "binance_spot",
+  "tf": "4h",
+  "strategy": "ma_cross",
+  "params": {
+   "fast": 20,
+   "slow": 50
+  },
+  "allow_short": false,
+  "trend_filter": true,
+  "vol_filter": false,
+  "sl_mode": "atr",
+  "atr_mult": 2,
+  "tp_r": 0.0,
+  "auto": true
+ }
+]
